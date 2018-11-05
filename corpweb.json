@@ -1,0 +1,187 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Parameters": {
+        "InstanceType": {
+          "Description": "Server instance type",
+          "Type": "String",
+          "Default": "t2.micro",
+          "AllowedValues": ["t2.micro", "t2.small" ],
+          "ConstraintDescription": "Must be a valid EC2 type."
+        },
+         "KeyPair" : {
+          "Description" : "AWS Key Pairs",
+          "Type" :"AWS::EC2::KeyPair::KeyName"
+         },
+         "YourIp" : {
+          "Description" : "Your IP Address",
+          "Type" :"String",
+          "Default": "0.0.0.0/0"
+         }
+      },
+    "Resources": {
+       
+        "engineeringVpc": {
+            "Type": "AWS::EC2::VPC",
+            "Properties": {
+              "EnableDnsSupport": "true",
+              "EnableDnsHostnames": "true",
+              "CidrBlock": "10.0.0.0/18",
+              "Tags": [
+                {
+                  "Key": "Name",
+                  "Value": "engineeringVpc"
+                }
+              ]
+            }
+          },
+        "publicSubnet1":{
+            "Type" : "AWS::EC2::Subnet",
+            "Properties" :{
+              "CidrBlock" :  "10.0.0.0/24",
+              "VpcId":{"Ref" : "engineeringVpc"},
+              "AvailabilityZone" :"us-east-1a",
+              "MapPublicIpOnLaunch" : "True",
+              "Tags": [  {"Key": "Name","Value": "publicSubnet1" }]
+            }
+        },
+        "publicSubnet2":{
+            "Type" : "AWS::EC2::Subnet",
+            "Properties" :{
+              "CidrBlock" :  "10.0.1.0/24",
+              "VpcId":{"Ref" : "engineeringVpc"},
+             "AvailabilityZone" :"us-east-1b",
+              "MapPublicIpOnLaunch" : "True",
+              "Tags": [  {"Key": "Name","Value": "publicSubnet2" }]
+            }
+        },
+        "InternetGateway": {
+            "Type": "AWS::EC2::InternetGateway",
+            "Properties": {}
+          },
+          "VPCGatewayAttachment": {
+            "Type": "AWS::EC2::VPCGatewayAttachment",
+            "Properties": {
+              "InternetGatewayId": {"Ref": "InternetGateway"},
+              "VpcId": { "Ref": "engineeringVpc"}
+            }
+          },
+          "PublicRouteTable": {
+            "Type": "AWS::EC2::RouteTable",
+            "Properties": {
+              "VpcId": { "Ref": "engineeringVpc" }
+            }
+          },
+          "PublicRoute": {
+            "Type": "AWS::EC2::Route",
+            "Properties": {
+              "DestinationCidrBlock": "0.0.0.0/0",
+              "RouteTableId": {"Ref": "PublicRouteTable" },
+              "GatewayId": {"Ref": "InternetGateway"}
+            },
+            "DependsOn": ["InternetGateway"]
+          },
+          "publicSubnet1RTassoc": {
+            "Type": "AWS::EC2::SubnetRouteTableAssociation",
+            "Properties": {
+              "RouteTableId": {"Ref": "PublicRouteTable"},
+              "SubnetId": {"Ref": "publicSubnet1"}
+            }
+          },
+        "publicSubnet2RTassoc": {
+            "Type": "AWS::EC2::SubnetRouteTableAssociation",
+            "Properties": {
+              "RouteTableId": {"Ref": "PublicRouteTable"},
+              "SubnetId": {"Ref": "publicSubnet2"}
+            }
+          },
+        "web1":{
+            "Type" :"AWS::EC2::Instance",
+            "Properties" :{
+                "ImageId": "ami-3ea13f29",
+                "SubnetId" :{"Ref": "publicSubnet1"},
+                "InstanceType" : {"Ref" : "InstanceType"},
+                "KeyName" : {"Ref" : "KeyPair"},
+                "SecurityGroupIds" : [{"Ref":"webserversSG"}]
+            },
+            "DependsOn":"PublicRoute"
+        },
+        "web2":{
+           "Type" :"AWS::EC2::Instance",
+           "Properties" :{
+               "ImageId": "ami-3ea13f29",
+               "SubnetId" : {"Ref" :"publicSubnet2"},
+               "InstanceType" : {"Ref" : "InstanceType"},
+               "KeyName" : {"Ref" : "KeyPair"},
+               "SecurityGroupIds" : [{"Ref":"webserversSG"}]
+           },               
+            "DependsOn":"PublicRoute"
+        },
+        "webserversSG" :{
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties":{
+              "VpcId": { "Ref": "engineeringVpc" },
+              "GroupName":"webserverSG",
+              "GroupDescription":"Security group for assignment7",
+              "SecurityGroupIngress" : [
+               {
+                "IpProtocol" : "tcp",
+                "FromPort" : 22,
+                "ToPort" : 22,
+                "CidrIp" : {"Ref" : "YourIp"}
+              },
+              {
+                "IpProtocol" : "tcp",
+                "FromPort" : 80,
+                "ToPort" : 80,
+                "CidrIp" : "0.0.0.0/0"
+               }
+             ] 
+          }
+        },
+          "engineeringLB" : {
+            "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+            "Properties": {
+              "Subnets" : [ {"Ref": "publicSubnet1"}, {"Ref" : "publicSubnet2"}],
+              "SecurityGroups":[ {"Ref": "webserversSG"}],
+              "Tags" : [{"Key" : "Name", "Value" : "engineeringLB" }]
+            }
+        },
+        "TargetGroup":{
+           "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+           "Properties":{
+               "Name":"engineeringWebservers",
+               "Port":"80",
+               "Protocol": "HTTP",
+               "Targets":[
+                   {"Id":{"Ref":"web1"},"Port":80}, 
+                   {"Id":{"Ref":"web2"},"Port":80}
+               ],
+               "HealthCheckPath" : "/",
+               "VpcId": {"Ref": "engineeringVpc"}
+            }
+        },
+        "ALBListener" : {
+          "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+          "Properties" : {
+            "DefaultActions" : [{
+              "Type" : "forward",
+              "TargetGroupArn" : { "Ref" : "TargetGroup" }
+               }],
+            "LoadBalancerArn" : { "Ref" : "engineeringLB" },
+            "Port" : "80",
+            "Protocol" : "HTTP"
+          }
+        }
+    },
+    "Outputs": {
+      "weburl": {
+        "Value" : { "Fn::GetAtt" : [ "engineeringLB", "DNSName" ]},
+        "Description":"LB DNS"
+      }
+    }
+
+ }
+
+
+
+  
